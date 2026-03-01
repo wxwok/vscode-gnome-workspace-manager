@@ -1,0 +1,289 @@
+{
+  "name": "gnome-workspace-manager",
+  "displayName": "GNOME Workspace Manager",
+  "description": "Manage and auto-place Cursor/VSCode project windows across GNOME workspaces",
+  "version": "0.1.0",
+  "publisher": "xuewen",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "gnome",
+    "workspace",
+    "window",
+    "manager",
+    "linux"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gwm.openManagement",
+        "title": "GWM: Open Management Panel",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "gwm.placeAll",
+        "title": "GWM: Place All Projects to Assigned Workspaces",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "gwm.placeCurrent",
+        "title": "GWM: Place Current Window to Assigned Workspace"
+      },
+      {
+        "command": "gwm.addCurrentProject",
+        "title": "GWM: Add Current Project to Manager",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gwm.assignWorkspace",
+        "title": "GWM: Assign GNOME Workspace to Project"
+      },
+      {
+        "command": "gwm.openProject",
+        "title": "GWM: Open Project in New Window",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "gwm.switchToProject",
+        "title": "GWM: Switch to Project Window",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "gwm.scanProjects",
+        "title": "GWM: Scan Directories for Projects",
+        "icon": "$(search)"
+      },
+      {
+        "command": "gwm.quickSwitch",
+        "title": "GWM: Quick Switch Project"
+      },
+      {
+        "command": "gwm.removeProject",
+        "title": "GWM: Remove Project from Manager",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "gwm.editProject",
+        "title": "GWM: Edit Project Settings",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "gwm.togglePin",
+        "title": "GWM: Toggle Pin Project",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "gwm.exportConfig",
+        "title": "GWM: Export Configuration"
+      },
+      {
+        "command": "gwm.importConfig",
+        "title": "GWM: Import Configuration"
+      },
+      {
+        "command": "gwm.refreshViews",
+        "title": "GWM: Refresh Views",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gwm.openProjectTerminal",
+        "title": "GWM: Open Terminal in Project",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "gwm.checkHealth",
+        "title": "GWM: Check Projects Health"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gwm-sidebar",
+          "title": "Workspace Manager",
+          "icon": "$(window)"
+        }
+      ]
+    },
+    "views": {
+      "gwm-sidebar": [
+        {
+          "id": "gwm.workspaceOverview",
+          "name": "Workspaces"
+        },
+        {
+          "id": "gwm.projects",
+          "name": "Projects"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "gwm.placeAll",
+          "when": "view == gwm.workspaceOverview",
+          "group": "navigation"
+        },
+        {
+          "command": "gwm.refreshViews",
+          "when": "view == gwm.workspaceOverview || view == gwm.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "gwm.addCurrentProject",
+          "when": "view == gwm.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "gwm.scanProjects",
+          "when": "view == gwm.projects",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gwm.openProject",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "inline@1"
+        },
+        {
+          "command": "gwm.switchToProject",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "inline@2"
+        },
+        {
+          "command": "gwm.editProject",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "1_edit@1"
+        },
+        {
+          "command": "gwm.assignWorkspace",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "1_edit@2"
+        },
+        {
+          "command": "gwm.togglePin",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "1_edit@3"
+        },
+        {
+          "command": "gwm.openProjectTerminal",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "2_actions@1"
+        },
+        {
+          "command": "gwm.removeProject",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "3_remove@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "gwm.quickSwitch",
+        "key": "ctrl+alt+p",
+        "when": "!editorFocus"
+      },
+      {
+        "command": "gwm.placeAll",
+        "key": "ctrl+alt+w",
+        "when": ""
+      }
+    ],
+    "configuration": {
+      "title": "GNOME Workspace Manager",
+      "properties": {
+        "gnomeWorkspaceManager.autoPlaceOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically place the current window to its assigned workspace when Cursor starts"
+        },
+        "gnomeWorkspaceManager.editorCommand": {
+          "type": "string",
+          "default": "auto",
+          "description": "Command to open projects (auto-detected: cursor, code, codium)",
+          "enum": [
+            "auto",
+            "cursor",
+            "code",
+            "codium"
+          ]
+        },
+        "gnomeWorkspaceManager.scanDirectories": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Directories to scan for projects"
+        },
+        "gnomeWorkspaceManager.scanDepth": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "How deep to scan for projects in scan directories"
+        },
+        "gnomeWorkspaceManager.projectIndicators": {
+          "type": "array",
+          "default": [
+            ".git",
+            "package.json",
+            "Cargo.toml",
+            "go.mod",
+            "pyproject.toml",
+            "setup.py",
+            "CMakeLists.txt",
+            "Makefile",
+            "pom.xml",
+            "build.gradle",
+            ".project",
+            "*.sln",
+            "pubspec.yaml"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Files/directories that indicate a folder is a project"
+        },
+        "gnomeWorkspaceManager.startupDelay": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 0,
+          "maximum": 30000,
+          "description": "Delay (ms) before auto-placing on startup to allow window to fully initialize"
+        },
+        "gnomeWorkspaceManager.windowMatchStrategy": {
+          "type": "string",
+          "default": "title",
+          "enum": [
+            "title",
+            "pid",
+            "both"
+          ],
+          "description": "Strategy to match editor windows to projects"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
