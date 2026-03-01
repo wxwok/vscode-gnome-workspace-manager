@@ -4,9 +4,11 @@ import { ProjectStore } from './projectStore';
 import { GnomeHelper } from './gnomeHelper';
 import { ManagedProject, WindowInfo } from './types';
 
-// ── Tree item types ──
+const DRAG_MIME = 'application/vnd.code.tree.gwmproject';
 
-class WorkspaceItem extends vscode.TreeItem {
+// ── Tree item types (exported so extension.ts and drag-drop can inspect them) ──
+
+export class WorkspaceItem extends vscode.TreeItem {
   constructor(
     public readonly workspaceIndex: number,
     label: string,
@@ -25,7 +27,7 @@ class WorkspaceItem extends vscode.TreeItem {
   }
 }
 
-class ProjectItem extends vscode.TreeItem {
+export class ProjectItem extends vscode.TreeItem {
   constructor(
     public readonly project: ManagedProject,
     public readonly isOpen: boolean,
@@ -79,7 +81,7 @@ class ProjectItem extends vscode.TreeItem {
   }
 }
 
-class UnassignedHeader extends vscode.TreeItem {
+export class UnassignedHeader extends vscode.TreeItem {
   constructor(count: number) {
     super('Unassigned', count > 0
       ? vscode.TreeItemCollapsibleState.Expanded
@@ -88,6 +90,57 @@ class UnassignedHeader extends vscode.TreeItem {
     this.contextValue = 'unassignedHeader';
     this.iconPath = new vscode.ThemeIcon('question');
     this.description = `${count} project${count === 1 ? '' : 's'}`;
+  }
+}
+
+// ── Drag-and-drop controller: drag projects between workspaces ──
+
+export class WorkspaceDragDropController implements vscode.TreeDragAndDropController<vscode.TreeItem> {
+  readonly dropMimeTypes = [DRAG_MIME];
+  readonly dragMimeTypes = [DRAG_MIME];
+
+  constructor(private store: ProjectStore) {}
+
+  handleDrag(
+    source: readonly vscode.TreeItem[],
+    dataTransfer: vscode.DataTransfer,
+    _token: vscode.CancellationToken,
+  ): void {
+    const ids: string[] = [];
+    for (const item of source) {
+      if (item instanceof ProjectItem) {
+        ids.push(item.project.id);
+      }
+    }
+    if (ids.length > 0) {
+      dataTransfer.set(DRAG_MIME, new vscode.DataTransferItem(JSON.stringify(ids)));
+    }
+  }
+
+  async handleDrop(
+    target: vscode.TreeItem | undefined,
+    dataTransfer: vscode.DataTransfer,
+    _token: vscode.CancellationToken,
+  ): Promise<void> {
+    const raw = dataTransfer.get(DRAG_MIME);
+    if (!raw || !target) { return; }
+
+    let targetWorkspace: number;
+    if (target instanceof WorkspaceItem) {
+      targetWorkspace = target.workspaceIndex;
+    } else if (target instanceof UnassignedHeader) {
+      targetWorkspace = -1;
+    } else if (target instanceof ProjectItem) {
+      // Dropped onto a sibling project — use that project's workspace
+      targetWorkspace = target.project.targetWorkspace;
+    } else {
+      return;
+    }
+
+    const ids: string[] = JSON.parse(raw.value);
+    for (const id of ids) {
+      await this.store.update(id, { targetWorkspace });
+    }
   }
 }
 

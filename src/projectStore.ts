@@ -1,7 +1,18 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { ManagedProject, createDefaultProject } from './types';
+
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'gnome-workspace-manager');
+const STATE_FILE = path.join(CONFIG_DIR, 'state.json');
+
+interface StateData {
+  version: number;
+  projects: ManagedProject[];
+  workspaceNames: Record<number, string>;
+  lastModified: number;
+}
 
 export class ProjectStore {
   private projects: ManagedProject[] = [];
@@ -10,24 +21,131 @@ export class ProjectStore {
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
 
-  /** Custom names for workspace indices */
   private workspaceNames: Record<number, string> = {};
+
+  private _watcher: fs.FSWatcher | undefined;
+  private _writing = false;
+  private _pollInterval: ReturnType<typeof setInterval> | undefined;
+  private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private _lastKnownMtime = 0;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+    this.ensureConfigDir();
     this.load();
+    this.startWatching();
+  }
+
+  dispose(): void {
+    this._watcher?.close();
+    if (this._pollInterval) { clearInterval(this._pollInterval); }
+    if (this._debounceTimer) { clearTimeout(this._debounceTimer); }
+  }
+
+  // ── File-based persistence with cross-window sync ──
+
+  private ensureConfigDir(): void {
+    if (!fs.existsSync(CONFIG_DIR)) {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    }
   }
 
   private load(): void {
-    this.projects = this.context.globalState.get<ManagedProject[]>('managedProjects', []);
-    this.workspaceNames = this.context.globalState.get<Record<number, string>>('workspaceNames', {});
+    if (fs.existsSync(STATE_FILE)) {
+      try {
+        const raw = fs.readFileSync(STATE_FILE, 'utf-8');
+        const data: StateData = JSON.parse(raw);
+        this.projects = data.projects || [];
+        this.workspaceNames = data.workspaceNames || {};
+        this._lastKnownMtime = fs.statSync(STATE_FILE).mtimeMs;
+        return;
+      } catch { /* fall through to globalState migration */ }
+    }
+
+    // Migrate from globalState on first run
+    const gsProjects = this.context.globalState.get<ManagedProject[]>('managedProjects');
+    const gsNames = this.context.globalState.get<Record<number, string>>('workspaceNames');
+    if (gsProjects && gsProjects.length > 0) {
+      this.projects = gsProjects;
+      this.workspaceNames = gsNames || {};
+      this.writeFile();
+    }
+  }
+
+  private writeFile(): void {
+    this.ensureConfigDir();
+    const data: StateData = {
+      version: 1,
+      projects: this.projects,
+      workspaceNames: this.workspaceNames,
+      lastModified: Date.now(),
+    };
+    this._writing = true;
+    fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    try {
+      this._lastKnownMtime = fs.statSync(STATE_FILE).mtimeMs;
+    } catch { /* ignore */ }
+    setTimeout(() => { this._writing = false; }, 500);
   }
 
   private async save(): Promise<void> {
-    await this.context.globalState.update('managedProjects', this.projects);
-    await this.context.globalState.update('workspaceNames', this.workspaceNames);
+    this.writeFile();
     this._onDidChange.fire();
   }
+
+  private startWatching(): void {
+    if (!fs.existsSync(STATE_FILE)) {
+      this.writeFile();
+    }
+
+    try {
+      this._watcher = fs.watch(STATE_FILE, { persistent: false }, (_event) => {
+        this.onExternalChange();
+      });
+      this._watcher.on('error', () => {
+        this._watcher?.close();
+        this._watcher = undefined;
+        this.startPolling();
+      });
+    } catch {
+      this.startPolling();
+    }
+  }
+
+  private startPolling(): void {
+    this._pollInterval = setInterval(() => {
+      try {
+        if (!fs.existsSync(STATE_FILE)) { return; }
+        const mtime = fs.statSync(STATE_FILE).mtimeMs;
+        if (mtime > this._lastKnownMtime) {
+          this.onExternalChange();
+        }
+      } catch { /* ignore */ }
+    }, 3000);
+  }
+
+  /** Called when the shared state file is modified (by another window). */
+  private onExternalChange(): void {
+    if (this._writing) { return; }
+
+    if (this._debounceTimer) { clearTimeout(this._debounceTimer); }
+    this._debounceTimer = setTimeout(() => {
+      try {
+        if (!fs.existsSync(STATE_FILE)) { return; }
+        const mtime = fs.statSync(STATE_FILE).mtimeMs;
+        if (mtime <= this._lastKnownMtime) { return; }
+
+        const raw = fs.readFileSync(STATE_FILE, 'utf-8');
+        const data: StateData = JSON.parse(raw);
+        this.projects = data.projects || [];
+        this.workspaceNames = data.workspaceNames || {};
+        this._lastKnownMtime = mtime;
+        this._onDidChange.fire();
+      } catch { /* ignore parse errors during concurrent writes */ }
+    }, 300);
+  }
+
+  // ── Queries ──
 
   getAll(): ManagedProject[] {
     return [...this.projects];
@@ -58,6 +176,8 @@ export class ProjectStore {
     const groups = new Set(this.projects.map(p => p.group).filter(Boolean));
     return [...groups].sort();
   }
+
+  // ── Mutations ──
 
   async add(project: ManagedProject): Promise<ManagedProject> {
     const existing = this.getByPath(project.path);
@@ -104,12 +224,18 @@ export class ProjectStore {
     }
   }
 
+  // ── Workspace names ──
+
   getWorkspaceName(index: number): string {
     return this.workspaceNames[index] || `Workspace ${index + 1}`;
   }
 
   async setWorkspaceName(index: number, name: string): Promise<void> {
-    this.workspaceNames[index] = name;
+    if (name && name.trim()) {
+      this.workspaceNames[index] = name.trim();
+    } else {
+      delete this.workspaceNames[index];
+    }
     await this.save();
   }
 

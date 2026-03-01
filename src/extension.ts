@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { GnomeHelper } from './gnomeHelper';
 import { ProjectStore } from './projectStore';
-import { WorkspaceTreeProvider, ProjectTreeProvider } from './treeProvider';
+import {
+  WorkspaceTreeProvider, ProjectTreeProvider,
+  WorkspaceDragDropController, WorkspaceItem, ProjectItem,
+} from './treeProvider';
 import { ManagementPanel } from './webviewPanel';
 import { StatusBarManager } from './statusBar';
-import { ManagedProject, createDefaultProject } from './types';
+import { ManagedProject } from './types';
 
 let outputChannel: vscode.OutputChannel;
 
@@ -20,12 +23,19 @@ export function activate(context: vscode.ExtensionContext) {
   const statusBar = new StatusBarManager(gnome);
 
   context.subscriptions.push(statusBar);
+  context.subscriptions.push({ dispose: () => store.dispose() });
 
-  // Register tree views
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('gwm.workspaceOverview', workspaceTree),
-    vscode.window.registerTreeDataProvider('gwm.projects', projectTree),
-  );
+  // Register tree views with drag-and-drop support
+  const dragDrop = new WorkspaceDragDropController(store);
+  const workspaceTreeView = vscode.window.createTreeView('gwm.workspaceOverview', {
+    treeDataProvider: workspaceTree,
+    dragAndDropController: dragDrop,
+    canSelectMany: true,
+  });
+  const projectTreeView = vscode.window.createTreeView('gwm.projects', {
+    treeDataProvider: projectTree,
+  });
+  context.subscriptions.push(workspaceTreeView, projectTreeView);
 
   // Initialize GNOME helper then perform startup tasks
   gnome.init().then(async () => {
@@ -328,6 +338,68 @@ export function activate(context: vscode.ExtensionContext) {
         await gnome.openInEditor(picked.project.path);
       }
       await store.updateLastOpened(picked.project.id);
+    }],
+
+    ['gwm.moveToWorkspace', async (arg?: ManagedProject) => {
+      let project: ManagedProject | undefined = arg;
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
+        project = await pickProject(store, 'Select project to move');
+      }
+      if (!project) { return; }
+
+      const workspaces = await gnome.getWorkspaces();
+      const wsItems = [
+        { label: 'Unassigned', value: -1 },
+        ...workspaces.map(ws => ({
+          label: store.getWorkspaceName(ws.index),
+          description: ws.isCurrent ? '(current)' : undefined,
+          value: ws.index,
+        })),
+      ];
+
+      const picked = await vscode.window.showQuickPick(wsItems, {
+        placeHolder: `Move "${project.name}" to workspace:`,
+      });
+      if (!picked) { return; }
+
+      await store.update(project.id, { targetWorkspace: picked.value });
+      refreshAll();
+    }],
+
+    ['gwm.renameWorkspace', async (arg?: any) => {
+      let wsIndex: number | undefined;
+
+      if (arg instanceof WorkspaceItem) {
+        wsIndex = arg.workspaceIndex;
+      }
+
+      if (wsIndex === undefined) {
+        const workspaces = await gnome.getWorkspaces();
+        const items = workspaces.map(ws => ({
+          label: store.getWorkspaceName(ws.index),
+          description: ws.isCurrent ? '(current)' : undefined,
+          value: ws.index,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Select workspace to rename',
+        });
+        if (!picked) { return; }
+        wsIndex = picked.value;
+      }
+
+      const currentName = store.getWorkspaceName(wsIndex);
+      const newName = await vscode.window.showInputBox({
+        prompt: `Rename workspace ${wsIndex + 1}`,
+        value: currentName,
+        placeHolder: `Workspace ${wsIndex + 1}`,
+      });
+      if (newName === undefined) { return; }
+
+      await store.setWorkspaceName(wsIndex, newName);
+      refreshAll();
     }],
 
     ['gwm.exportConfig', () => store.exportToFile()],

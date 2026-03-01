@@ -102,6 +102,16 @@
       {
         "command": "gwm.checkHealth",
         "title": "GWM: Check Projects Health"
+      },
+      {
+        "command": "gwm.moveToWorkspace",
+        "title": "GWM: Move Project to Workspace",
+        "icon": "$(move)"
+      },
+      {
+        "command": "gwm.renameWorkspace",
+        "title": "GWM: Rename Workspace",
+        "icon": "$(edit)"
       }
     ],
     "viewsContainers": {
@@ -165,14 +175,19 @@
           "group": "1_edit@1"
         },
         {
-          "command": "gwm.assignWorkspace",
+          "command": "gwm.moveToWorkspace",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "1_edit@2"
         },
         {
-          "command": "gwm.togglePin",
+          "command": "gwm.assignWorkspace",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "1_edit@3"
+        },
+        {
+          "command": "gwm.togglePin",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "1_edit@4"
         },
         {
           "command": "gwm.openProjectTerminal",
@@ -183,6 +198,16 @@
           "command": "gwm.removeProject",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "3_remove@1"
+        },
+        {
+          "command": "gwm.renameWorkspace",
+          "when": "viewItem == workspace",
+          "group": "inline@1"
+        },
+        {
+          "command": "gwm.renameWorkspace",
+          "when": "viewItem == workspace",
+          "group": "1_workspace@1"
         }
       ]
     },
