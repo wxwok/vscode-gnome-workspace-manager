@@ -112,6 +112,11 @@
         "command": "gwm.renameWorkspace",
         "title": "GWM: Rename Workspace",
         "icon": "$(edit)"
+      },
+      {
+        "command": "gwm.renameProject",
+        "title": "GWM: Rename Project",
+        "icon": "$(symbol-text)"
       }
     ],
     "viewsContainers": {
@@ -170,24 +175,29 @@
           "group": "inline@2"
         },
         {
-          "command": "gwm.editProject",
+          "command": "gwm.renameProject",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "1_edit@1"
         },
         {
-          "command": "gwm.moveToWorkspace",
+          "command": "gwm.editProject",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "1_edit@2"
         },
         {
-          "command": "gwm.assignWorkspace",
+          "command": "gwm.moveToWorkspace",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "1_edit@3"
         },
         {
-          "command": "gwm.togglePin",
+          "command": "gwm.assignWorkspace",
           "when": "viewItem == project || viewItem == pinnedProject",
           "group": "1_edit@4"
+        },
+        {
+          "command": "gwm.togglePin",
+          "when": "viewItem == project || viewItem == pinnedProject",
+          "group": "1_edit@5"
         },
         {
           "command": "gwm.openProjectTerminal",

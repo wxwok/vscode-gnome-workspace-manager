@@ -201,6 +201,27 @@ export function activate(context: vscode.ExtensionContext) {
       refreshAll();
     }],
 
+    ['gwm.renameProject', async (arg?: ManagedProject) => {
+      let project: ManagedProject | undefined = arg;
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
+        project = await pickProject(store, 'Select project to rename');
+      }
+      if (!project) { return; }
+
+      const newName = await vscode.window.showInputBox({
+        prompt: `Rename project "${project.name}"`,
+        value: project.name,
+        validateInput: v => v.trim() ? null : 'Name cannot be empty',
+      });
+      if (newName === undefined || newName.trim() === project.name) { return; }
+
+      await store.update(project.id, { name: newName.trim() });
+      refreshAll();
+    }],
+
     ['gwm.editProject', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
       if (!project) {
