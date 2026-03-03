@@ -11,6 +11,8 @@ export interface ManagedProject {
   color: string;
   /** Whether to auto-open this project on startup */
   autoOpen: boolean;
+  /** Path to .code-workspace file (used for window title matching after "Save Workspace As...") */
+  workspaceFile: string;
 }
 
 export interface WorkspaceInfo {
@@ -53,7 +55,25 @@ export function createDefaultProject(path: string, name?: string): ManagedProjec
     lastOpened: 0,
     color: '',
     autoOpen: false,
+    workspaceFile: '',
   };
+}
+
+/**
+ * Returns title substrings to match against window titles, ordered by priority.
+ * If a .code-workspace file is set, its name comes first (since Cursor uses it
+ * as the window title after "Save Workspace As..."), with the folder name as fallback.
+ */
+export function getWindowMatchNames(project: ManagedProject): string[] {
+  const names: string[] = [];
+  if (project.workspaceFile) {
+    const wsFileName = project.workspaceFile.split('/').pop() || '';
+    const wsName = wsFileName.replace(/\.code-workspace$/, '');
+    if (wsName) { names.push(wsName); }
+  }
+  const folderName = project.path.split('/').pop() || '';
+  if (folderName && !names.includes(folderName)) { names.push(folderName); }
+  return names;
 }
 
 export function generateId(): string {

@@ -146,17 +146,21 @@ export class GnomeHelper {
   }
 
   /**
-   * Find editor windows (Cursor / VSCode / Codium) matching a project folder name.
+   * Find editor windows (Cursor / VSCode / Codium) matching project title patterns.
+   * Accepts a single name, array of names, or no argument (returns all editor windows).
    */
-  async findEditorWindows(folderName?: string): Promise<WindowInfo[]> {
+  async findEditorWindows(nameOrNames?: string | string[]): Promise<WindowInfo[]> {
     const allWindows = await this.getWindows();
     const editorPatterns = [/cursor/i, /code/i, /codium/i, /visual studio code/i];
+    const names = nameOrNames
+      ? (Array.isArray(nameOrNames) ? nameOrNames : [nameOrNames])
+      : [];
 
     return allWindows.filter(w => {
       const isEditor = editorPatterns.some(p => p.test(w.title) || p.test(w.wmClass));
       if (!isEditor) { return false; }
-      if (folderName) {
-        return w.title.includes(folderName);
+      if (names.length > 0) {
+        return names.some(n => w.title.includes(n));
       }
       return true;
     });
@@ -301,6 +305,68 @@ export class GnomeHelper {
       });
     }
     return workspaces;
+  }
+
+  // ── Close windows ──
+
+  async closeWindow(windowId: string): Promise<boolean> {
+    try {
+      if (this._hasWmctrl) {
+        await execAsync(`wmctrl -i -c ${windowId}`);
+        this.log(`Closed window ${windowId}`);
+        return true;
+      }
+      if (this._hasGdbus) {
+        return this.closeWindowGdbus(windowId);
+      }
+    } catch (e) {
+      this.log(`Error closing window: ${e}`);
+    }
+    return false;
+  }
+
+  private async closeWindowGdbus(windowId: string): Promise<boolean> {
+    const js = `
+      (function() {
+        let actors = global.get_window_actors();
+        for (let a of actors) {
+          let w = a.get_meta_window();
+          if (String(w.get_id()) === '${windowId}') {
+            w.delete(global.get_current_time());
+            return true;
+          }
+        }
+        return false;
+      })()
+    `.replace(/\n/g, ' ').trim();
+
+    try {
+      const { stdout } = await execAsync(
+        `gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "${js.replace(/"/g, '\\"')}"`
+      );
+      return this.parseGdbusResult(stdout) === 'true';
+    } catch (e) {
+      this.log(`gdbus closeWindow failed: ${e}`);
+      return false;
+    }
+  }
+
+  async closeWindowByTitle(titleMatch: string): Promise<boolean> {
+    try {
+      if (this._hasWmctrl) {
+        await execAsync(`wmctrl -c "${titleMatch}"`);
+        this.log(`Closed window matching "${titleMatch}"`);
+        return true;
+      }
+      const windows = await this.getWindows();
+      const win = windows.find(w => w.title.includes(titleMatch));
+      if (win) {
+        return this.closeWindow(win.id);
+      }
+    } catch (e) {
+      this.log(`Error closing window by title: ${e}`);
+    }
+    return false;
   }
 
   // ── Focus & switch ──

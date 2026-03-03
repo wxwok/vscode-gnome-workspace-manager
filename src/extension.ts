@@ -8,7 +8,7 @@ import {
 } from './treeProvider';
 import { ManagementPanel } from './webviewPanel';
 import { StatusBarManager } from './statusBar';
-import { ManagedProject } from './types';
+import { ManagedProject, getWindowMatchNames } from './types';
 
 let outputChannel: vscode.OutputChannel;
 
@@ -44,6 +44,24 @@ export function activate(context: vscode.ExtensionContext) {
     projectTree.refreshWithWindows();
     statusBar.update();
 
+    // Auto-detect .code-workspace file for the current project
+    const wsFile = vscode.workspace.workspaceFile;
+    if (wsFile && wsFile.scheme === 'file') {
+      const folder = getCurrentWorkspaceFolder();
+      if (folder) {
+        const project = store.getByPath(folder);
+        if (project && project.workspaceFile !== wsFile.fsPath) {
+          const updates: Partial<ManagedProject> = { workspaceFile: wsFile.fsPath };
+          const folderName = folder.split('/').pop() || '';
+          const wsName = (wsFile.fsPath.split('/').pop() || '').replace(/\.code-workspace$/, '');
+          if (wsName && project.name === folderName) {
+            updates.name = wsName;
+          }
+          store.update(project.id, updates);
+        }
+      }
+    }
+
     const config = vscode.workspace.getConfiguration('gnomeWorkspaceManager');
     if (config.get<boolean>('autoPlaceOnStartup', true)) {
       const delay = config.get<number>('startupDelay', 2000);
@@ -53,10 +71,10 @@ export function activate(context: vscode.ExtensionContext) {
     // Auto-open projects marked with autoOpen
     const autoOpenProjects = store.getAll().filter(p => p.autoOpen);
     for (const project of autoOpenProjects) {
-      const folderName = project.path.split('/').pop() || '';
-      const openWindows = await gnome.findEditorWindows(folderName);
+      const names = getWindowMatchNames(project);
+      const openWindows = await gnome.findEditorWindows(names);
       if (openWindows.length === 0) {
-        gnome.openInEditor(project.path);
+        gnome.openInEditor(project.workspaceFile || project.path);
         store.updateLastOpened(project.id);
       }
     }
@@ -77,8 +95,12 @@ export function activate(context: vscode.ExtensionContext) {
       }
       let placed = 0;
       for (const project of projects) {
-        const folderName = project.path.split('/').pop() || '';
-        const success = await gnome.moveWindowByTitle(folderName, project.targetWorkspace);
+        const names = getWindowMatchNames(project);
+        let success = false;
+        for (const name of names) {
+          success = await gnome.moveWindowByTitle(name, project.targetWorkspace);
+          if (success) { break; }
+        }
         if (success) { placed++; }
       }
       vscode.window.showInformationMessage(`Placed ${placed}/${projects.length} project windows.`);
@@ -116,14 +138,30 @@ export function activate(context: vscode.ExtensionContext) {
       });
       if (!picked) { return; }
 
+      const currentWsFile = vscode.workspace.workspaceFile;
+      const wsFilePath = currentWsFile?.scheme === 'file' ? currentWsFile.fsPath : '';
+      const wsName = wsFilePath
+        ? (wsFilePath.split('/').pop() || '').replace(/\.code-workspace$/, '')
+        : '';
+
       const project = await store.addFromPath(folder, picked.value);
-      vscode.window.showInformationMessage(`Added "${project.name}" to workspace manager.`);
+      if (wsFilePath) {
+        await store.update(project.id, {
+          workspaceFile: wsFilePath,
+          name: wsName || project.name,
+        });
+      }
+      const displayName = wsName || project.name;
+      vscode.window.showInformationMessage(`Added "${displayName}" to workspace manager.`);
       refreshAll();
     }],
 
     ['gwm.assignWorkspace', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project to assign');
       }
       if (!project) { return; }
@@ -152,32 +190,42 @@ export function activate(context: vscode.ExtensionContext) {
 
     ['gwm.openProject', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project to open');
       }
       if (!project) { return; }
 
-      await gnome.openInEditor(project.path);
+      await gnome.openInEditor(project.workspaceFile || project.path);
       await store.updateLastOpened(project.id);
       refreshAll();
     }],
 
     ['gwm.switchToProject', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project to switch to');
       }
       if (!project) { return; }
 
-      const folderName = project.path.split('/').pop() || '';
-      const found = await gnome.focusWindowByTitle(folderName);
+      const names = getWindowMatchNames(project);
+      let found = false;
+      for (const name of names) {
+        found = await gnome.focusWindowByTitle(name);
+        if (found) { break; }
+      }
       if (!found) {
         const action = await vscode.window.showInformationMessage(
           `"${project.name}" is not open. Open it now?`,
           'Open', 'Cancel',
         );
         if (action === 'Open') {
-          await gnome.openInEditor(project.path);
+          await gnome.openInEditor(project.workspaceFile || project.path);
           await store.updateLastOpened(project.id);
         }
       } else {
@@ -187,7 +235,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     ['gwm.removeProject', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project to remove');
       }
       if (!project) { return; }
@@ -224,7 +275,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     ['gwm.editProject', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project to edit');
       }
       if (!project) { return; }
@@ -255,7 +309,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     ['gwm.togglePin', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project to pin/unpin');
       }
       if (!project) { return; }
@@ -330,8 +387,8 @@ export function activate(context: vscode.ExtensionContext) {
       const items = [...projects]
         .sort((a, b) => (b.lastOpened || 0) - (a.lastOpened || 0))
         .map(p => {
-          const folderName = p.path.split('/').pop() || '';
-          const isOpen = openWindows.some(w => w.title.includes(folderName));
+          const names = getWindowMatchNames(p);
+          const isOpen = openWindows.some(w => names.some(n => w.title.includes(n)));
           const wsLabel = p.targetWorkspace >= 0
             ? `WS ${p.targetWorkspace + 1}`
             : '';
@@ -353,10 +410,13 @@ export function activate(context: vscode.ExtensionContext) {
       if (!picked) { return; }
 
       if (picked.isOpen) {
-        const folderName = picked.project.path.split('/').pop() || '';
-        await gnome.focusWindowByTitle(folderName);
+        const names = getWindowMatchNames(picked.project);
+        for (const name of names) {
+          const found = await gnome.focusWindowByTitle(name);
+          if (found) { break; }
+        }
       } else {
-        await gnome.openInEditor(picked.project.path);
+        await gnome.openInEditor(picked.project.workspaceFile || picked.project.path);
       }
       await store.updateLastOpened(picked.project.id);
     }],
@@ -423,6 +483,180 @@ export function activate(context: vscode.ExtensionContext) {
       refreshAll();
     }],
 
+    ['gwm.openAll', async () => {
+      const projects = store.getAll();
+      if (projects.length === 0) {
+        vscode.window.showInformationMessage('No projects managed yet.');
+        return;
+      }
+      const openWindows = await gnome.findEditorWindows();
+      let opened = 0;
+      for (const project of projects) {
+        const names = getWindowMatchNames(project);
+        const alreadyOpen = openWindows.some(w => names.some(n => w.title.includes(n)));
+        if (!alreadyOpen) {
+          await gnome.openInEditor(project.workspaceFile || project.path);
+          await store.updateLastOpened(project.id);
+          opened++;
+        }
+      }
+      vscode.window.showInformationMessage(
+        opened > 0
+          ? `Opened ${opened} project${opened === 1 ? '' : 's'}.`
+          : 'All projects are already open.'
+      );
+      refreshAll();
+    }],
+
+    ['gwm.closeAll', async () => {
+      const projects = store.getAll();
+      if (projects.length === 0) {
+        vscode.window.showInformationMessage('No projects managed yet.');
+        return;
+      }
+      const confirm = await vscode.window.showWarningMessage(
+        `Close all open project windows? (${projects.length} managed)`,
+        { modal: true }, 'Close All',
+      );
+      if (confirm !== 'Close All') { return; }
+
+      let closed = 0;
+      for (const project of projects) {
+        const names = getWindowMatchNames(project);
+        for (const name of names) {
+          const success = await gnome.closeWindowByTitle(name);
+          if (success) { closed++; break; }
+        }
+      }
+      vscode.window.showInformationMessage(`Closed ${closed} project window${closed === 1 ? '' : 's'}.`);
+      setTimeout(() => refreshAll(), 1000);
+    }],
+
+    ['gwm.closeOthers', async (arg?: ManagedProject) => {
+      let project: ManagedProject | undefined = arg;
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
+        project = await pickProject(store, 'Keep this project open, close others');
+      }
+      if (!project) { return; }
+
+      const others = store.getAll().filter(p => p.id !== project!.id);
+      let closed = 0;
+      for (const other of others) {
+        const names = getWindowMatchNames(other);
+        for (const name of names) {
+          const success = await gnome.closeWindowByTitle(name);
+          if (success) { closed++; break; }
+        }
+      }
+      vscode.window.showInformationMessage(
+        `Closed ${closed} other project window${closed === 1 ? '' : 's'}. "${project.name}" kept open.`
+      );
+      setTimeout(() => refreshAll(), 1000);
+    }],
+
+    ['gwm.openWorkspaceProjects', async (arg?: any) => {
+      let wsIndex: number | undefined;
+      if (arg instanceof WorkspaceItem) {
+        wsIndex = arg.workspaceIndex;
+      }
+      if (wsIndex === undefined) {
+        const workspaces = await gnome.getWorkspaces();
+        const items = workspaces.map(ws => ({
+          label: store.getWorkspaceName(ws.index),
+          description: ws.isCurrent ? '(current)' : undefined,
+          value: ws.index,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Open all projects in which workspace?',
+        });
+        if (!picked) { return; }
+        wsIndex = picked.value;
+      }
+
+      const projects = store.getByWorkspace(wsIndex);
+      if (projects.length === 0) {
+        vscode.window.showInformationMessage('No projects assigned to this workspace.');
+        return;
+      }
+      const openWindows = await gnome.findEditorWindows();
+      let opened = 0;
+      for (const project of projects) {
+        const names = getWindowMatchNames(project);
+        const alreadyOpen = openWindows.some(w => names.some(n => w.title.includes(n)));
+        if (!alreadyOpen) {
+          await gnome.openInEditor(project.workspaceFile || project.path);
+          await store.updateLastOpened(project.id);
+          opened++;
+        }
+      }
+      vscode.window.showInformationMessage(
+        opened > 0
+          ? `Opened ${opened} project${opened === 1 ? '' : 's'} in ${store.getWorkspaceName(wsIndex)}.`
+          : `All projects in ${store.getWorkspaceName(wsIndex)} are already open.`
+      );
+      refreshAll();
+    }],
+
+    ['gwm.closeWorkspaceProjects', async (arg?: any) => {
+      let wsIndex: number | undefined;
+      if (arg instanceof WorkspaceItem) {
+        wsIndex = arg.workspaceIndex;
+      }
+      if (wsIndex === undefined) {
+        const workspaces = await gnome.getWorkspaces();
+        const items = workspaces.map(ws => ({
+          label: store.getWorkspaceName(ws.index),
+          description: ws.isCurrent ? '(current)' : undefined,
+          value: ws.index,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Close all projects in which workspace?',
+        });
+        if (!picked) { return; }
+        wsIndex = picked.value;
+      }
+
+      const projects = store.getByWorkspace(wsIndex);
+      if (projects.length === 0) {
+        vscode.window.showInformationMessage('No projects assigned to this workspace.');
+        return;
+      }
+
+      let closed = 0;
+      for (const project of projects) {
+        const names = getWindowMatchNames(project);
+        for (const name of names) {
+          const success = await gnome.closeWindowByTitle(name);
+          if (success) { closed++; break; }
+        }
+      }
+      vscode.window.showInformationMessage(
+        `Closed ${closed} project window${closed === 1 ? '' : 's'} in ${store.getWorkspaceName(wsIndex)}.`
+      );
+      setTimeout(() => refreshAll(), 1000);
+    }],
+
+    ['gwm.toggleAutoOpen', async (arg?: ManagedProject) => {
+      let project: ManagedProject | undefined = arg;
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
+        project = await pickProject(store, 'Toggle auto-open for project');
+      }
+      if (!project) { return; }
+
+      const newValue = !project.autoOpen;
+      await store.update(project.id, { autoOpen: newValue });
+      vscode.window.showInformationMessage(
+        `"${project.name}" will ${newValue ? 'auto-open' : 'no longer auto-open'} on startup.`
+      );
+      refreshAll();
+    }],
+
     ['gwm.exportConfig', () => store.exportToFile()],
     ['gwm.importConfig', () => store.importFromFile()],
 
@@ -430,7 +664,10 @@ export function activate(context: vscode.ExtensionContext) {
 
     ['gwm.openProjectTerminal', async (arg?: ManagedProject) => {
       let project: ManagedProject | undefined = arg;
-      if (!project) {
+      if (arg && arg instanceof ProjectItem) {
+        project = (arg as any).project;
+      }
+      if (!project || !project.id) {
         project = await pickProject(store, 'Select project for terminal');
       }
       if (!project) { return; }
@@ -511,8 +748,12 @@ async function autoPlaceCurrentProject(store: ProjectStore, gnome: GnomeHelper):
   const project = store.getByPath(folder);
   if (!project || project.targetWorkspace < 0) { return; }
 
-  const folderName = folder.split('/').pop() || '';
-  const success = await gnome.moveWindowByTitle(folderName, project.targetWorkspace);
+  const names = getWindowMatchNames(project);
+  let success = false;
+  for (const name of names) {
+    success = await gnome.moveWindowByTitle(name, project.targetWorkspace);
+    if (success) { break; }
+  }
   if (success) {
     outputChannel.appendLine(`Auto-placed "${project.name}" to workspace ${project.targetWorkspace + 1}.`);
   }

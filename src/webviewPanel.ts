@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ProjectStore } from './projectStore';
 import { GnomeHelper } from './gnomeHelper';
-import { ManagedProject, PROJECT_COLORS, WorkspaceInfo, WindowInfo } from './types';
+import { ManagedProject, PROJECT_COLORS, WorkspaceInfo, WindowInfo, getWindowMatchNames } from './types';
 
 export class ManagementPanel {
   public static currentPanel: ManagementPanel | undefined;
@@ -87,13 +87,20 @@ export class ManagementPanel {
       case 'togglePin':
         await this.store.togglePin(msg.id);
         break;
-      case 'openProject':
-        await this.gnome.openInEditor(msg.path);
+      case 'openProject': {
+        const openProject = this.store.getById(msg.id);
+        const openPath = openProject?.workspaceFile || msg.path;
+        await this.gnome.openInEditor(openPath);
         await this.store.updateLastOpened(msg.id);
         break;
+      }
       case 'switchToProject': {
-        const folderName = msg.path.split('/').pop() || '';
-        await this.gnome.focusWindowByTitle(folderName);
+        const switchProject = this.store.getById(msg.id);
+        const names = switchProject ? getWindowMatchNames(switchProject) : [msg.path.split('/').pop() || ''];
+        for (const name of names) {
+          const found = await this.gnome.focusWindowByTitle(name);
+          if (found) { break; }
+        }
         break;
       }
       case 'placeAll':
@@ -102,8 +109,11 @@ export class ManagementPanel {
       case 'placeProject': {
         const project = this.store.getById(msg.id);
         if (project && project.targetWorkspace >= 0) {
-          const folderName = project.path.split('/').pop() || '';
-          await this.gnome.moveWindowByTitle(folderName, project.targetWorkspace);
+          const names = getWindowMatchNames(project);
+          for (const name of names) {
+            const success = await this.gnome.moveWindowByTitle(name, project.targetWorkspace);
+            if (success) { break; }
+          }
         }
         break;
       }
@@ -116,6 +126,38 @@ export class ManagementPanel {
       case 'importConfig':
         await this.store.importFromFile();
         break;
+      case 'openAll':
+        await this.openAllProjects(msg.workspace);
+        break;
+      case 'closeAll':
+        await this.closeAllProjects(msg.workspace);
+        break;
+      case 'closeOthers': {
+        const keepProject = this.store.getById(msg.id);
+        if (keepProject) {
+          const others = this.store.getAll().filter(p => p.id !== keepProject.id);
+          let closed = 0;
+          for (const other of others) {
+            const otherNames = getWindowMatchNames(other);
+            for (const name of otherNames) {
+              const success = await this.gnome.closeWindowByTitle(name);
+              if (success) { closed++; break; }
+            }
+          }
+          vscode.window.showInformationMessage(
+            `Closed ${closed} other window${closed === 1 ? '' : 's'}. "${keepProject.name}" kept open.`
+          );
+          setTimeout(() => this.sendUpdate(), 1000);
+        }
+        break;
+      }
+      case 'toggleAutoOpen': {
+        const autoProject = this.store.getById(msg.id);
+        if (autoProject) {
+          await this.store.update(msg.id, { autoOpen: !autoProject.autoOpen });
+        }
+        break;
+      }
       case 'refreshWindows':
         await this.sendUpdate();
         break;
@@ -126,12 +168,57 @@ export class ManagementPanel {
     const projects = this.store.getAll().filter(p => p.targetWorkspace >= 0);
     let placed = 0;
     for (const project of projects) {
-      const folderName = project.path.split('/').pop() || '';
-      const success = await this.gnome.moveWindowByTitle(folderName, project.targetWorkspace);
+      const names = getWindowMatchNames(project);
+      let success = false;
+      for (const name of names) {
+        success = await this.gnome.moveWindowByTitle(name, project.targetWorkspace);
+        if (success) { break; }
+      }
       if (success) { placed++; }
     }
     vscode.window.showInformationMessage(`Placed ${placed}/${projects.length} project windows.`);
     await this.sendUpdate();
+  }
+
+  private async openAllProjects(workspace?: number): Promise<void> {
+    const projects = workspace !== undefined && workspace >= 0
+      ? this.store.getByWorkspace(workspace)
+      : this.store.getAll();
+    const openWindows = await this.gnome.findEditorWindows();
+    let opened = 0;
+    for (const project of projects) {
+      const names = getWindowMatchNames(project);
+      const alreadyOpen = openWindows.some(w => names.some(n => w.title.includes(n)));
+      if (!alreadyOpen) {
+        await this.gnome.openInEditor(project.workspaceFile || project.path);
+        await this.store.updateLastOpened(project.id);
+        opened++;
+      }
+    }
+    vscode.window.showInformationMessage(
+      opened > 0
+        ? `Opened ${opened} project${opened === 1 ? '' : 's'}.`
+        : 'All projects are already open.'
+    );
+    await this.sendUpdate();
+  }
+
+  private async closeAllProjects(workspace?: number): Promise<void> {
+    const projects = workspace !== undefined && workspace >= 0
+      ? this.store.getByWorkspace(workspace)
+      : this.store.getAll();
+    let closed = 0;
+    for (const project of projects) {
+      const names = getWindowMatchNames(project);
+      for (const name of names) {
+        const success = await this.gnome.closeWindowByTitle(name);
+        if (success) { closed++; break; }
+      }
+    }
+    vscode.window.showInformationMessage(
+      `Closed ${closed} project window${closed === 1 ? '' : 's'}.`
+    );
+    setTimeout(() => this.sendUpdate(), 1000);
   }
 
   private async sendUpdate(): Promise<void> {
@@ -548,6 +635,17 @@ export class ManagementPanel {
     background: var(--vscode-editor-background);
     border: 2px dashed var(--card-border);
   }
+
+  .ws-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .workspace-card:hover .ws-actions { opacity: 1; }
+
+  button.icon-btn.faded { opacity: 0.3; }
+  button.icon-btn.faded:hover { opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -563,7 +661,13 @@ export class ManagementPanel {
     Workspace Manager
   </h1>
   <div class="header-actions">
-    <button onclick="send('placeAll')" title="Move all project windows to their assigned workspaces">
+    <button onclick="send('openAll')" title="Open all projects that aren't already open">
+      ▶ Open All
+    </button>
+    <button onclick="confirmCloseAll()" class="secondary" title="Close all open project windows">
+      ✕ Close All
+    </button>
+    <button onclick="send('placeAll')" class="secondary" title="Move all project windows to their assigned workspaces">
       ⬡ Place All
     </button>
     <button onclick="send('refreshWindows')" class="secondary" title="Refresh window status">
@@ -610,6 +714,10 @@ export class ManagementPanel {
       <label>Color</label>
       <div class="color-picker" id="editColorPicker"></div>
     </div>
+    <div class="field">
+      <label>Workspace File</label>
+      <input type="text" id="editWorkspaceFile" placeholder="Path to .code-workspace file (auto-detected)">
+    </div>
     <div class="field" style="display:flex; align-items:center; gap:8px;">
       <input type="checkbox" id="editAutoOpen">
       <label for="editAutoOpen" style="margin:0;">Auto-open on startup</label>
@@ -647,9 +755,21 @@ window.addEventListener('message', event => {
   }
 });
 
-function isOpen(project) {
+function getMatchNames(project) {
+  const names = [];
+  if (project.workspaceFile) {
+    const wsFileName = project.workspaceFile.split('/').pop() || '';
+    const wsName = wsFileName.replace(/\\.code-workspace$/, '');
+    if (wsName) names.push(wsName);
+  }
   const folderName = project.path.split('/').pop() || '';
-  return state.windows.some(w => w.title.includes(folderName));
+  if (folderName && !names.includes(folderName)) names.push(folderName);
+  return names;
+}
+
+function isOpen(project) {
+  const names = getMatchNames(project);
+  return state.windows.some(w => names.some(n => w.title.includes(n)));
 }
 
 function render() {
@@ -693,7 +813,12 @@ function renderWorkspaceGrid() {
     html += '<input class="workspace-name-input" value="' + escHtml(ws.name) + '" data-ws-index="' + ws.index + '" onchange="renameWorkspace(this)" />';
     html += '<span class="badge">' + projects.length + '</span>';
     if (ws.isCurrent) html += '<span class="badge" style="background:var(--accent)">current</span>';
-    html += '</div></div>';
+    html += '</div>';
+    html += '<div class="ws-actions">';
+    html += '<button class="icon-btn" onclick="send(\'openAll\', {workspace: ' + ws.index + '})" title="Open all projects in this workspace">▶</button>';
+    html += '<button class="icon-btn" onclick="send(\'closeAll\', {workspace: ' + ws.index + '})" title="Close all projects in this workspace">✕</button>';
+    html += '</div>';
+    html += '</div>';
 
     for (const p of projects) {
       html += renderProjectChip(p);
@@ -728,7 +853,9 @@ function renderProjectChip(p) {
   html += '<button class="icon-btn" onclick="send(\'openProject\', {id:\'' + p.id + '\', path:\'' + escJs(p.path) + '\'})" title="Open">▶</button>';
   html += '<button class="icon-btn" onclick="send(\'switchToProject\', {id:\'' + p.id + '\', path:\'' + escJs(p.path) + '\'})" title="Switch to window">⇄</button>';
   html += '<button class="icon-btn" onclick="send(\'placeProject\', {id:\'' + p.id + '\'})" title="Place to workspace">⬡</button>';
+  html += '<button class="icon-btn" onclick="send(\'closeOthers\', {id:\'' + p.id + '\'})" title="Close other windows">⊘</button>';
   html += '<button class="icon-btn" onclick="openEditModal(\'' + p.id + '\')" title="Edit">✎</button>';
+  html += '<button class="icon-btn' + (p.autoOpen ? '' : ' faded') + '" onclick="send(\'toggleAutoOpen\', {id:\'' + p.id + '\'})" title="' + (p.autoOpen ? 'Auto-open enabled' : 'Auto-open disabled') + '">' + (p.autoOpen ? '🚀' : '💤') + '</button>';
   html += '<button class="icon-btn danger" onclick="send(\'removeProject\', {id:\'' + p.id + '\'})" title="Remove">✕</button>';
   html += '</span></div>';
   return html;
@@ -769,8 +896,10 @@ function renderProjectsTable() {
     html += '<button class="icon-btn" onclick="send(\'openProject\', {id:\'' + p.id + '\', path:\'' + escJs(p.path) + '\'})" title="Open">▶</button>';
     html += '<button class="icon-btn" onclick="send(\'switchToProject\', {id:\'' + p.id + '\', path:\'' + escJs(p.path) + '\'})" title="Switch">⇄</button>';
     html += '<button class="icon-btn" onclick="send(\'placeProject\', {id:\'' + p.id + '\'})" title="Place">⬡</button>';
+    html += '<button class="icon-btn" onclick="send(\'closeOthers\', {id:\'' + p.id + '\'})" title="Close others">⊘</button>';
     html += '<button class="icon-btn" onclick="openEditModal(\'' + p.id + '\')" title="Edit">✎</button>';
     html += '<button class="icon-btn" onclick="send(\'togglePin\', {id:\'' + p.id + '\'})" title="Pin">' + (p.pinned ? '📌' : '📍') + '</button>';
+    html += '<button class="icon-btn' + (p.autoOpen ? '' : ' faded') + '" onclick="send(\'toggleAutoOpen\', {id:\'' + p.id + '\'})" title="' + (p.autoOpen ? 'Auto-open on startup' : 'No auto-open') + '">' + (p.autoOpen ? '🚀' : '💤') + '</button>';
     html += '<button class="icon-btn danger" onclick="send(\'removeProject\', {id:\'' + p.id + '\'})" title="Remove">✕</button>';
     html += '</td></tr>';
   }
@@ -791,6 +920,7 @@ function openEditModal(id) {
   document.getElementById('editName').value = project.name;
   document.getElementById('editGroup').value = project.group || '';
   document.getElementById('editNotes').value = project.notes || '';
+  document.getElementById('editWorkspaceFile').value = project.workspaceFile || '';
   document.getElementById('editAutoOpen').checked = project.autoOpen || false;
 
   const picker = document.getElementById('editColorPicker');
@@ -823,6 +953,7 @@ function saveEdit() {
       name: document.getElementById('editName').value,
       group: document.getElementById('editGroup').value,
       notes: document.getElementById('editNotes').value,
+      workspaceFile: document.getElementById('editWorkspaceFile').value,
       color: color === 'none' ? '' : color,
       autoOpen: document.getElementById('editAutoOpen').checked,
     }
@@ -838,6 +969,12 @@ function escHtml(s) {
 
 function escJs(s) {
   return s.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'");
+}
+
+function confirmCloseAll() {
+  if (confirm('Close all open project windows?')) {
+    send('closeAll');
+  }
 }
 
 // Initial data request

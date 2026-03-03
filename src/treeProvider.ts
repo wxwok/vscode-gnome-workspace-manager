@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { ProjectStore } from './projectStore';
 import { GnomeHelper } from './gnomeHelper';
-import { ManagedProject, WindowInfo } from './types';
+import { ManagedProject, WindowInfo, getWindowMatchNames } from './types';
 
 const DRAG_MIME = 'application/vnd.code.tree.gwmproject';
 
@@ -218,8 +218,8 @@ export class WorkspaceTreeProvider implements vscode.TreeDataProvider<vscode.Tre
   }
 
   private isProjectOpen(project: ManagedProject): boolean {
-    const folderName = project.path.split('/').pop() || '';
-    return this.openWindows.some(w => w.title.includes(folderName));
+    const names = getWindowMatchNames(project);
+    return this.openWindows.some(w => names.some(n => w.title.includes(n)));
   }
 
   private sortProjects(projects: ManagedProject[]): ManagedProject[] {
@@ -305,8 +305,8 @@ export class ProjectTreeProvider implements vscode.TreeDataProvider<vscode.TreeI
   }
 
   private isProjectOpen(project: ManagedProject): boolean {
-    const folderName = project.path.split('/').pop() || '';
-    return this.openWindows.some(w => w.title.includes(folderName));
+    const names = getWindowMatchNames(project);
+    return this.openWindows.some(w => names.some(n => w.title.includes(n)));
   }
 
   private sortProjects(projects: ManagedProject[]): ManagedProject[] {
